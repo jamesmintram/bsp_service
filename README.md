@@ -1,2 +1,12 @@
 # bsp_service
-REST Service for the BSP viewer I am developing
+
+A small project designed to work with the BSP viewer I am writing in Objective-C and Metal.
+
+## Installation
+
+None yet
+
+
+### Bugs
+
+...
