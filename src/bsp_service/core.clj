@@ -5,7 +5,7 @@
 
 (defroutes app
   (ANY "/" [] (resource :available-media-types ["text/html"]
-                           :handle-ok "<html>Hello, Internet.</html>"))
+                           :handle-ok "<html>Hello, Internet</html>"))
   (ANY "/foo" [] (resource :available-media-types ["text/html"]
                            :handle-ok (fn [ctx]
                                         (format "<html>It's %d milliseconds since the beginning of the epoch."

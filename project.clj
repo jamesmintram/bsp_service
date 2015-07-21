@@ -1,3 +1,6 @@
+(comment
+	Look into using pedestal
+	)
 (defproject bsp_service "0.1.0-SNAPSHOT"
   :description "FIXME: write description"
   :url "http://example.com/FIXME"
