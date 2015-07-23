@@ -17,7 +17,9 @@
           sbuffer (new StringBuffer)]
 
       (while (< (.length sbuffer) buffer_max)
-        (.append sbuffer (async/<!! from-processed-messages)))
+        (doseq [item (async/<!! from-processed-messages)]
+          (.append sbuffer (str item "\n"))))
+        
 
       (async/>!! to-bucket (.toString sbuffer)))))
 
@@ -62,8 +64,8 @@
 ;
 (defn process
   [line]
-  (clojure.string/join (for [ i (range 3) ]
-    (str line i))))
+  (for [ i (range 3) ]
+    (str line i)))
 
 (defn now [] (new java.util.Date))
 (def date-format (new java.text.SimpleDateFormat "yyyy-MM-dd-HH-ss-SS"))
