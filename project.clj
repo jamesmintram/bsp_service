@@ -14,10 +14,14 @@
   }
 
   :dependencies [ [org.clojure/clojure "1.6.0"]
+                  [lein-light-nrepl "0.1.0" :exclusions [[com.fasterxml.jackson.core/jackson-core]]]
                   [org.clojure/core.async "0.1.346.0-17112a-alpha"]
   				        [liberator "0.13"]
   				        [compojure "1.3.4"]
-                  [ring/ring-core "1.2.1"]]
+                  [ring/ring-core "1.2.1"]
+                  [amazonica "0.3.29"]]
+
+  :repl-options {:nrepl-middleware [lighttable.nrepl.handler/lighttable-ops]}
 
   :main ^:skip-aot bsp-service.core
   :target-path "target/%s"

@@ -1,14 +1,18 @@
+;
+; Code for buffering and pushing out log streams to S3
+;
 (ns bsp_service.core
   (:require [liberator.core :refer [resource defresource]]
             [ring.middleware.params :refer [wrap-params]]
             [compojure.core :refer [defroutes ANY]]
-            [clojure.core.async :as async]))
+            [clojure.core.async :as async]
+            [clojure.string :as string]))
 
-; TODO: A control line wich will let us trigger a flush 
+; TODO: A control line wich will let us trigger a flush
 ; on the buffer
 (defn storage-buffer
   "This will fill a buffer until full. When full it will
-  swap to a new buffer and schedule the old buffer to be 
+  swap to a new buffer and schedule the old buffer to be
   stored.
   Change this to a Java Buffer which I can then dump"
   [group from-processed-messages to-bucket]
@@ -17,10 +21,8 @@
           sbuffer (new StringBuffer)]
 
       (while (< (.length sbuffer) buffer_max)
-        (doseq [item (async/<!! from-processed-messages)]
+        (let [item (async/<!! from-processed-messages)]
           (.append sbuffer (str item "\n"))))
-        
-
       (async/>!! to-bucket (.toString sbuffer)))))
 
 (defn storage-buffer-channel
@@ -31,70 +33,71 @@
     (async/go (storage-buffer group input-channel output-channel))
     output-channel))
 
-(defn message-fan-out
-  "Takes a single input channel and returns a list of channels - each of which will
-  recieve everything from the input channel."
 
-  [input-channel output-channel-count]
-  (let 
-    [output-channels (repeat output-channel-count (async/chan (async/sliding-buffer 1024)))]
-    (async/thread
-        (while true
-          (let [line (async/<!! input-channel)]
-            (doseq [channel output-channels]
-              (async/>!! channel line)))))
-    output-channels))
-
-(defn start-async-consumers
-  "Start a consumer for each group which can process each message as it sees fit. Creates 1 thread
-  per destination."
-  [groups event-sink aggregator destination]
-  (let 
-    [ output-channels (message-fan-out event-sink (count groups)) ]
-    (doseq [[group input-channel] (map list groups output-channels)]
-        (async/thread (destination group (storage-buffer-channel group (async/map< aggregator input-channel)))))))
+(defn start-channel-consumers
+  [channel-map destination]
+  (doseq [[group-name group-data] channel-map]
+    (async/thread (destination group-name (storage-buffer-channel (group-data :data) (group-data :chan))))))
 
 
-;  An ETL (Extract Transform Load) application. 
-;
-;  TODO Look at closing channels, docs for pipe good place to start.
-;        Refactor this to use Async Pipelines - Reason I haven't yet; this is a learning excercise.
-;
-; Thread count is nSegments + 1
-;
-(defn process
-  [line]
-  (for [ i (range 3) ]
-    (str line i)))
+(defn create-channel-map
+  [segments]
+  (let
+    [channel-map (into {}
+                       (for [[segment-name segment-data] segments]
+                            [segment-name {:data segment-data :chan (async/chan)}]))]
+    channel-map))
+
+
+(defn create-channel-pipeline [event-types destination]
+  (let
+    [channel-map (create-channel-map event-types)]
+    (start-channel-consumers channel-map destination )
+    (fn [event]
+      (let [[event-type app-id & event-pieces] (string/split event #"\|")
+            event-channel (channel-map event-type)]
+        (if (nil? event-channel)
+          (println "Event type not found - need to send down the error pipe")
+          (do (async/>!! (event-channel :chan) event-pieces)))))))
+
+
+(defn feed-channel-pipeline [event-source pipeline]
+  (while true
+    (let [event (async/<!! event-source)]
+      (pipeline event))))
+
 
 (defn now [] (new java.util.Date))
 (def date-format (new java.text.SimpleDateFormat "yyyy-MM-dd-HH-ss-SS"))
 
-(defn to-s3
+(defn to-file
   [storage-params]
-  (fn [group to-bucket]
+  (fn [group-name to-bucket]
+    (println group-name)
     (doseq [i (iterate inc 1)]
-      (let [file-name (str  (:name group) "-" 
-                            (.format date-format (now)) "-" 
+      (let [file-name (str  group-name "-"
+                            (.format date-format (now)) "-"
                             (:instance-hash storage-params) "-log.txt")
             log_chunk (async/<!! to-bucket)
-            bwr (new java.io.BufferedWriter(new java.io.FileWriter (new java.io.File file-name)))] 
+            bwr (new java.io.BufferedWriter(new java.io.FileWriter (new java.io.File file-name)))]
 
         (.write bwr log_chunk)
         (.flush bwr)
         (.close bwr)))))
- 
-;        (println "DUMP:" (.format date-format (now)) i log_chunk)))))
+
+
+;Load this data in so we can throw out bad event types
+(def event-types {
+                  "http" {:buffer (* 1024 1)}
+                  "ssh" {:buffer (* 1024 1)}
+                  })
 
 (def event-sink (async/chan (async/sliding-buffer 1024)))
-(defn test_boot
-  []
-  (let
-    [groups [ {:name "seg1" :buffer 1024}
-              {:name "seg2" :buffer 328}
-              {:name "seg3" :buffer 512}
-              {:name "seg4" :buffer 128}]]
-    (start-async-consumers groups event-sink process (to-s3 {:instance-hash "ABCD"}))))
+(defn test_boot []
+    (async/thread
+     (feed-channel-pipeline event-sink
+                            (create-channel-pipeline event-types
+                                                     (to-file {:instance-hash "ABCD"})))))
 
 
 (defroutes app
@@ -103,10 +106,10 @@
 
   (ANY "/foo" [] (resource :available-media-types ["text/html"]
                            :handle-ok (fn [ctx]
-                                        (async/>!! event-sink "Hello From a Request")
+                                        (async/>!! event-sink "http|tasklist|error|ListEmpty")
                                         (format "<html>It's %d milliseconds since the beginning of the epoch."
                                                 (System/currentTimeMillis))))))
 
-(def handler 
-  (-> app 
+(def handler
+  (-> app
       wrap-params))
