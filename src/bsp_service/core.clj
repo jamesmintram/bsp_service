@@ -28,8 +28,8 @@
 (defn storage-buffer-channel
   "Takes an input channel, and returns an output channel. Data from the input channel
   is buffered until a flush is triggered by becomming full."
-    [group input-channel]
-    (let [output-channel (async/chan)]
+  [group input-channel]
+  (let [output-channel (async/chan)]
     (async/go (storage-buffer group input-channel output-channel))
     output-channel))
 
@@ -45,7 +45,7 @@
   (let
     [channel-map (into {}
                        (for [[segment-name segment-data] segments]
-                            [segment-name {:data segment-data :chan (async/chan)}]))]
+                         [segment-name {:data segment-data :chan (async/chan)}]))]
     channel-map))
 
 
@@ -57,7 +57,7 @@
       (let [[event-type app-id & event-pieces] (string/split event #"\|")
             event-channel (channel-map event-type)]
         (if (nil? event-channel)
-          (println "Event type not found - need to send down the error pipe")
+          (println "Event type not found - need to send down the error pipe: " event-type)
           (do (async/>!! (event-channel :chan) event-pieces)))))))
 
 
@@ -92,23 +92,27 @@
                   "ssh" {:buffer (* 1024 1)}
                   })
 
+
 (def event-sink (async/chan (async/sliding-buffer 1024)))
 (defn test_boot []
-    (async/thread
-     (feed-channel-pipeline event-sink
-                            (create-channel-pipeline event-types
-                                                     (to-file {:instance-hash "ABCD"})))))
+
+  (async/thread
+   (feed-channel-pipeline event-sink
+                          (create-channel-pipeline event-types
+                                                   (to-file {:instance-hash "ABCD"})))))
 
 
 (defroutes app
   (ANY "/" [] (resource :available-media-types ["text/html"]
-                           :handle-ok "<html>Hello, Internet</html>"))
+                        :handle-ok "<html>Hello, Internet</html>"))
 
-  (ANY "/foo" [] (resource :available-media-types ["text/html"]
-                           :handle-ok (fn [ctx]
-                                        (async/>!! event-sink "http|tasklist|error|ListEmpty")
-                                        (format "<html>It's %d milliseconds since the beginning of the epoch."
-                                                (System/currentTimeMillis))))))
+  (ANY "/foo" [event] (resource
+                       :allowed-methods[:post :get]
+                       :available-media-types ["text/html"]
+
+                       :post! (fn [ctx]
+                                (let [body (slurp (get-in ctx [:request :body]))]
+                                  (async/>!! event-sink body))))))
 
 (def handler
   (-> app
