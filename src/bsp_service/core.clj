@@ -28,7 +28,7 @@
 (defn storage-buffer-channel
   "Takes an input channel, and returns an output channel. Data from the input channel
   is buffered until a flush is triggered by becomming full."
-  [group input-channel]
+  [input-channel group]
   (let [output-channel (async/chan)]
     (async/go (storage-buffer group input-channel output-channel))
     output-channel))
@@ -37,7 +37,12 @@
 (defn start-channel-consumers
   [channel-map destination]
   (doseq [[group-name group-data] channel-map]
-    (async/thread (destination group-name (storage-buffer-channel (group-data :data) (group-data :chan))))))
+
+     (async/thread
+      (->
+       (group-data :chan)
+       (storage-buffer-channel (group-data :data))
+       (destination group-name)))))
 
 
 (defn create-channel-map
@@ -72,7 +77,7 @@
 
 (defn to-file
   [storage-params]
-  (fn [group-name to-bucket]
+  (fn [to-bucket group-name]
     (println group-name)
     (doseq [i (iterate inc 1)]
       (let [file-name (str  group-name "-"
