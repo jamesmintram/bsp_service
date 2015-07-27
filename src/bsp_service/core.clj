@@ -2,9 +2,9 @@
 ; Code for buffering and pushing out log streams to S3
 ;
 (ns bsp_service.core
-  (:require [liberator.core :refer [resource defresource]]
+  (:require ;[liberator.core :refer [resource defresource]]
             [ring.middleware.params :refer [wrap-params]]
-            [compojure.core :refer [defroutes ANY]]
+            [compojure.core :refer [defroutes ANY GET POST]]
             [clojure.core.async :as async]
             [clojure.string :as string]))
 
@@ -75,6 +75,15 @@
 (defn now [] (new java.util.Date))
 (def date-format (new java.text.SimpleDateFormat "yyyy-MM-dd-HH-ss-SS"))
 
+
+(defn new-uuid
+  "Retrieve a type 4 (pseudo randomly generated) UUID.
+  The UUID is generated using a cryptographically
+  strong pseudo random number generator."
+  []
+  (str (java.util.UUID/randomUUID)))
+
+
 (defn to-file
   [storage-params]
   (fn [to-bucket group-name]
@@ -82,7 +91,7 @@
     (doseq [i (iterate inc 1)]
       (let [file-name (str  group-name "-"
                             (.format date-format (now)) "-"
-                            (:instance-hash storage-params) "-log.txt")
+                            (:instance-hash storage-params) ".txt")
             log_chunk (async/<!! to-bucket)
             bwr (new java.io.BufferedWriter(new java.io.FileWriter (new java.io.File file-name)))]
 
@@ -100,25 +109,17 @@
 
 (def event-sink (async/chan (async/sliding-buffer 1024)))
 (defn test_boot []
-
+  (let [session-id (new-uuid)]
   (async/thread
    (feed-channel-pipeline event-sink
                           (create-channel-pipeline event-types
-                                                   (to-file {:instance-hash "ABCD"})))))
+                                                   (to-file {:instance-hash session-id}))))))
 
 
-(defroutes app
-  (ANY "/" [] (resource :available-media-types ["text/html"]
-                        :handle-ok "<html>Hello, Internet</html>"))
-
-  (ANY "/foo" [event] (resource
-                       :allowed-methods[:post :get]
-                       :available-media-types ["text/html"]
-
-                       :post! (fn [ctx]
-                                (let [body (slurp (get-in ctx [:request :body]))]
-                                  (async/>!! event-sink body))))))
+(defroutes thin-app
+  (GET "/" [] "")
+  (POST "/foo" req (async/>!! event-sink (slurp (:body req))) ""))
 
 (def handler
-  (-> app
+  (-> thin-app
       wrap-params))
