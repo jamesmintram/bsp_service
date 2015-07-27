@@ -1,6 +1,3 @@
-(comment
-	Look into using pedestal
-	)
 (defproject bsp_service "0.1.0-SNAPSHOT"
   :description "FIXME: write description"
   :url "http://example.com/FIXME"
@@ -16,7 +13,6 @@
   :dependencies [ [org.clojure/clojure "1.6.0"]
                   [lein-light-nrepl "0.1.0" :exclusions [[com.fasterxml.jackson.core/jackson-core]]]
                   [org.clojure/core.async "0.1.346.0-17112a-alpha"]
-  				        ;[liberator "0.13"]
   				        [compojure "1.3.4"]
                   [ring/ring-core "1.2.1"]
                   [amazonica "0.3.29"]]
