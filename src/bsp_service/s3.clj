@@ -1,26 +1,15 @@
 (ns bsp_service.s3
-  (:import com.amazonaws.auth.DefaultAWSCredentialsProviderChain
-           org.joda.time.DateTime
-           java.io.BufferedInputStream
-           java.io.File
-           java.io.FileInputStream
+  (:import java.io.ByteArrayInputStream
            java.text.SimpleDateFormat
-           java.util.Date
-           java.util.UUID
-           java.security.KeyPairGenerator
-           java.security.SecureRandom)
-  (:require [clojure.string :as str]
-            [clojure.core.async :as async :refer [<!!]])
-  (:use ;[clojure.test]
-        ;[clojure.pprint]
-        [amazonica.core]
+           java.util.Date)
+  (:require [clojure.core.async :as async])
+  (:use [amazonica.core]
         [amazonica.aws.s3]))
 
 ;; put object from stream
 (defn upload
   [file-name byte-buffer buffer-len]
-  (put-object   cred
-              :bucket-name "test-analytic-data"
+  (put-object :bucket-name "test-analytic-data"
               :key file-name
               :input-stream byte-buffer
               :metadata {:content-length buffer-len}
@@ -30,20 +19,20 @@
 (defn upload-buffer
   [file-name string-buffer]
   (let [data (.getBytes(.toString string-buffer))]
-    (upload file-name (java.io.ByteArrayInputStream. data) (count data))))
+    (upload file-name (ByteArrayInputStream. data) (count data))))
 
-(defn now [] (new java.util.Date))
-(def date-format (new java.text.SimpleDateFormat "yyyy-MM-dd-HH-ss-SS"))
+(defn now [] (new Date))
+(def date-format (new SimpleDateFormat "yyyy-MM-dd-HH-ss-SS"))
 
 (defn to-s3
   [storage-params]
-  (fn [group-name to-bucket]
+  (fn [to-bucket group-name]
     (println group-name)
-    (doseq [i (iterate inc 1)]
+    (doseq [_ (iterate inc 1)]
       (let [file-name (str  group-name "-"
                             (.format date-format (now)) "-"
                             (:instance-hash storage-params) ".txt")
-            log_chunk (<!! to-bucket)]
+            log_chunk (async/<!! to-bucket)]
         ;Write out the buffer to S3
         (println "Uploading to S3")
         (upload-buffer file-name log_chunk)

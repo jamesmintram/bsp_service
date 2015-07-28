@@ -2,11 +2,18 @@
 ; Code for buffering and pushing out log streams to S3
 ;
 (ns bsp_service.core
-  (:require ;[liberator.core :refer [resource defresource]]
-            [ring.middleware.params :refer [wrap-params]]
+  (:import java.util.Date
+           java.text.SimpleDateFormat
+           java.io.BufferedWriter
+           java.io.FileWriter
+           java.io.File
+           java.util.UUID [randomUUID] )
+
+  (:require [ring.middleware.params :refer [wrap-params]]
             [compojure.core :refer [defroutes ANY GET POST]]
             [clojure.core.async :as async]
-            [clojure.string :as string]))
+            [clojure.string :as string]
+            [bsp_service.s3 :as s3]))
 
 ; TODO: A control line wich will let us trigger a flush
 ; on the buffer
@@ -72,8 +79,8 @@
       (pipeline event))))
 
 
-(defn now [] (new java.util.Date))
-(def date-format (new java.text.SimpleDateFormat "yyyy-MM-dd-HH-ss-SS"))
+(defn now [] (new Date))
+(def date-format (new SimpleDateFormat "yyyy-MM-dd-HH-ss-SS"))
 
 
 (defn new-uuid
@@ -81,19 +88,19 @@
   The UUID is generated using a cryptographically
   strong pseudo random number generator."
   []
-  (str (java.util.UUID/randomUUID)))
+  (str (UUID/randomUUID)))
 
 
 (defn to-file
   [storage-params]
   (fn [to-bucket group-name]
     (println group-name)
-    (doseq [i (iterate inc 1)]
+    (doseq [_ (iterate inc 1)]
       (let [file-name (str  group-name "-"
                             (.format date-format (now)) "-"
                             (:instance-hash storage-params) ".txt")
             log_chunk (async/<!! to-bucket)
-            bwr (new java.io.BufferedWriter(new java.io.FileWriter (new java.io.File file-name)))]
+            bwr (new BufferedWriter(new FileWriter (new File file-name)))]
 
         (.write bwr log_chunk)
         (.flush bwr)
@@ -102,8 +109,8 @@
 
 ;Load this data in so we can throw out bad event types
 (def event-types {
-                  "http" {:buffer (* 1024 1)}
-                  "ssh" {:buffer (* 1024 1)}
+                  "http" {:buffer (* 1024 1024 10)}
+                  "ssh" {:buffer (* 1024 1024 10)}
                   })
 
 
