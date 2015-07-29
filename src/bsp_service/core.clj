@@ -12,25 +12,34 @@
   (:require [ring.middleware.params :refer [wrap-params]]
             [compojure.core :refer [defroutes ANY GET POST]]
             [clojure.core.async :as async]
-            [clojure.string :as string]
-            [bsp_service.s3 :as s3]))
+            [clojure.string :as string]))
 
 ; TODO: A control line wich will let us trigger a flush
 ; on the buffer
 (defn storage-buffer
   "This will fill a buffer until full. When full it will
   swap to a new buffer and schedule the old buffer to be
-  stored.
-  Change this to a Java Buffer which I can then dump"
+  stored."
   [group from-processed-messages to-bucket]
-  (while true
+  (loop []
     (let [buffer_max (group :buffer)
           sbuffer (new StringBuffer)]
 
-      (while (< (.length sbuffer) buffer_max)
-        (let [item (async/<!! from-processed-messages)]
-          (.append sbuffer (str item "\n"))))
-      (async/>!! to-bucket (.toString sbuffer)))))
+      (loop []
+        (if-let [item (async/<!! from-processed-messages)]
+          ;Success in taking from the channel
+          (do
+            (.append sbuffer (str item "\n"))
+            (if (< (.length sbuffer) buffer_max) (recur)))
+
+          ;Failure in taking from the channel - flush and close
+          (do
+            (async/>!! to-bucket (.toString sbuffer))
+            (async/close! to-bucket))))
+
+      ;Attempt to flush - if we fail, then the channel has been closed
+      (if (async/>!! to-bucket (.toString sbuffer))
+        (recur)))))
 
 (defn storage-buffer-channel
   "Takes an input channel, and returns an output channel. Data from the input channel
@@ -54,11 +63,9 @@
 
 (defn create-channel-map
   [segments]
-  (let
-    [channel-map (into {}
-                       (for [[segment-name segment-data] segments]
-                         [segment-name {:data segment-data :chan (async/chan)}]))]
-    channel-map))
+  (into {}
+        (for [[segment-name segment-data] segments]
+          [segment-name {:data segment-data :chan (async/chan)}])))
 
 
 (defn create-channel-pipeline [event-types destination]
@@ -74,9 +81,11 @@
 
 
 (defn feed-channel-pipeline [event-source pipeline]
-  (while true
-    (let [event (async/<!! event-source)]
-      (pipeline event))))
+  "Reads input from event-source until nil is encountered,
+  indicating a closed channel."
+  (loop []
+    (when-let [event (async/<!! event-source)]
+      (do (pipeline event) (recur))))(println "Closing Feed Channel"))
 
 
 (defn now [] (new Date))
@@ -90,42 +99,53 @@
   []
   (str (UUID/randomUUID)))
 
-
+;Macrofy this - we just want the inner let expression
 (defn to-file
   [storage-params]
   (fn [to-bucket group-name]
-    (println group-name)
-    (doseq [_ (iterate inc 1)]
-      (let [file-name (str  group-name "-"
-                            (.format date-format (now)) "-"
-                            (:instance-hash storage-params) ".txt")
-            log_chunk (async/<!! to-bucket)
-            bwr (new BufferedWriter(new FileWriter (new File file-name)))]
 
-        (.write bwr log_chunk)
-        (.flush bwr)
-        (.close bwr)))))
+    ;Repeat until the channel returns nil (Closed)
+    (loop []
+      (if-let [log_chunk (async/<!! to-bucket)]
+        (let [file-name (str  group-name "-"
+                              (.format date-format (now)) "-"
+                              (:instance-hash storage-params) ".txt")
+              bwr (new BufferedWriter(new FileWriter (new File file-name)))]
+
+          (.write bwr log_chunk)
+          (.flush bwr)
+          (.close bwr)
+          (recur))
+        (println "Closing down channel")))))
 
 
 ;Load this data in so we can throw out bad event types
 (def event-types {
                   "http" {:buffer (* 1024 1024 10)}
-                  "ssh" {:buffer (* 1024 1024 10)}
-                  })
+                  "ssh"  {:buffer (* 1024 1024 10)}})
 
-
-(def event-sink (async/chan (async/sliding-buffer 1024)))
+(def event-sink (async/chan 1024))
 (defn test_boot []
   (let [session-id (new-uuid)]
-  (async/thread
+   (async/thread
    (feed-channel-pipeline event-sink
-                          (create-channel-pipeline event-types
-                                                   (to-file {:instance-hash session-id}))))))
+   (create-channel-pipeline event-types
+                           (to-file {:instance-hash session-id}))))))
 
+(def RESPONSE_OK {:status 202
+      :headers {}
+      :body ""})
+
+(def RESPONSE_BUSY {:status 503
+                  :headers {}
+                  :body ""})
 
 (defroutes thin-app
   (GET "/" [] "")
-  (POST "/foo" req (async/>!! event-sink (slurp (:body req))) ""))
+           (POST "/foo" req
+             (if (= [:failed :default] (async/alts!! [[event-sink (slurp (:body req))]] :default :failed))
+                RESPONSE_BUSY
+                RESPONSE_OK)))
 
 (def handler
   (-> thin-app
