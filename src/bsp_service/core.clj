@@ -12,7 +12,9 @@
   (:require [ring.middleware.params :refer [wrap-params]]
             [compojure.core :refer [defroutes ANY GET POST]]
             [clojure.core.async :as async]
-            [clojure.string :as string]))
+            [clojure.string :as string]
+            [cheshire.core :as json]
+            [bsp_service.s3 :as s3]))
 
 ; TODO: A control line wich will let us trigger a flush
 ; on the buffer
@@ -58,7 +60,7 @@
       (->
        (group-data :chan)
        (storage-buffer-channel (group-data :data))
-       (destination group-name)))))
+       (destination (name group-name))))))
 
 
 (defn create-channel-map
@@ -73,7 +75,8 @@
     [channel-map (create-channel-map event-types)]
     (start-channel-consumers channel-map destination )
     (fn [event]
-      (let [[event-type app-id & event-pieces] (string/split event #"\|")
+      (let [[event-type-name app-id & event-pieces] (string/split event #"\|")
+            event-type (keyword event-type-name)
             event-channel (channel-map event-type)]
         (if (nil? event-channel)
           (println "Event type not found - need to send down the error pipe: " event-type)
@@ -119,17 +122,35 @@
         (println "Closing down channel")))))
 
 
-;Load this data in so we can throw out bad event types
-(def event-types {
-                  "http" {:buffer (* 1024 1024 10)}
-                  "ssh"  {:buffer (* 1024 1024 10)}})
+(defn int-or-default [default value] (if (integer? value) value default))
+
+(def conf-processors [
+                      [:buffer (partial int-or-default (* 1024 1024 10))]
+                      [:buffer-2 (partial int-or-default (* 1024 1024 20))]
+                    ])
+
+(defn event-process
+  [processors]
+  (fn [event-conf]
+    (into event-conf
+          (for [[default-key default-item-fn] processors]
+            (let [event-item (event-conf default-key)]
+              [default-key (default-item-fn event-item)])))))
+
+(defn process-config [config]
+  (let [processors (event-process conf-processors)]
+    (into {} (for [[key data] config] [key (processors data)]))))
+
+(defn file-event-types []
+  (process-config (json/parse-stream (clojure.java.io/reader "config.json") true)))
 
 (def event-sink (async/chan 1024))
+
 (defn test_boot []
   (let [session-id (new-uuid)]
    (async/thread
    (feed-channel-pipeline event-sink
-   (create-channel-pipeline event-types
+   (create-channel-pipeline (file-event-types)
                            (to-file {:instance-hash session-id}))))))
 
 (def RESPONSE_OK {:status 202

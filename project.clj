@@ -21,7 +21,8 @@
                   [org.clojure/core.async "0.1.346.0-17112a-alpha"]
   				        [compojure "1.4.0" :exclusions [ring/ring-core]]
                   [ring/ring-core "1.4.0" :exclusions [org.clojure/clojure]]
-                 ;[amazonica "0.3.29" :exclusions [org.apache.httpcomponents/httpclient joda-time]]
+                  [cheshire "5.5.0"]
+                  [amazonica "0.3.29" :exclusions [org.apache.httpcomponents/httpclient joda-time]]
                  ]
 
   ;:repl-options {:nrepl-middleware [lighttable.nrepl.handler/lighttable-ops]}
